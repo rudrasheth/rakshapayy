@@ -77,7 +77,7 @@ async def verify_receiver(tx: TransactionRequest):
         return {"risk_score": 100, "verdict": "MALICIOUS", "breakdown": breakdown}
 
     # --- Tier 2: Linguistic Regex Check ---
-    keywords = ['winner', 'lottery', 'offer', 'refund', 'lucky', 'kyc', 'pmcare', 'funds', 'cash', 'loan', 'update']
+    keywords = ['winner', 'lottery', 'offer', 'refund', 'lucky', 'kyc', 'pmcare', 'funds', 'cash', 'loan', 'update', 'bonus', 'bonanza', 'prize']
     has_keyword = any(k in tx.receiver_vpa.lower() for k in keywords)
     numeric_handle = bool(re.search(r'^\d+@', tx.receiver_vpa))
 
@@ -117,6 +117,35 @@ async def verify_receiver(tx: TransactionRequest):
             print(f"Inference Error: {e}")
             breakdown.append("ML: Inference failed")
 
+    # --- Tier 4: Gemini LLM Fallback (Smart Semantic Check) ---
+    # Only check if not already CONFIRMED malicious (to save API calls/latency)
+    # But check if there's any doubt or if user explicitly wants deep scanning
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if risk_score < 80 and GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            llm_model = genai.GenerativeModel('gemini-pro')
+            
+            prompt = f"""
+            Analyze this UPI ID for fraud risk: '{tx.receiver_vpa}'.
+            Is it trying to impersonate a brand, promise money, or look like an official authority?
+            Return ONLY a JSON: {{"risk_score": 0-100, "reason": "short explanation"}}
+            """
+            
+            response = llm_model.generate_content(prompt)
+            # Basic parsing (LLM might return code blocks)
+            clean_text = response.text.replace('```json', '').replace('```', '').strip()
+            import json
+            llm_result = json.loads(clean_text)
+            
+            if llm_result.get('risk_score', 0) > 40:
+                risk_score = max(risk_score, llm_result['risk_score']) # Take the higher risk
+                breakdown.append(f"AI: {llm_result.get('reason')}")
+                
+        except Exception as e:
+            print(f"Gemini Error: {e}")
+
     # Final Verdict Logic
     final_score = min(risk_score, 100)
     verdict = "SAFE"
@@ -132,5 +161,4 @@ async def verify_receiver(tx: TransactionRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
 

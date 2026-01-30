@@ -20,6 +20,13 @@ export class FraudDetectionService {
         const reasons: string[] = [];
         let verdict: RiskResult['verdict'] = 'SAFE';
 
+        // --- 0. Basic Sanity Checks ---
+        // Check for Self-Transaction (Sender == Receiver)
+        if (sender_upi_id === receiver_upi_id) {
+            score += 50; // High risk for self-sending on same VPA (illogical)
+            reasons.push('Circular Transaction: Sender and Receiver are identical');
+        }
+
         // --- Call Python ML Service ---
         try {
             // Note: In production use value from env, defaulting for demo
@@ -48,22 +55,30 @@ export class FraudDetectionService {
             reasons.push('ML Service Unavailable (Fallback to basic rules)');
         }
 
-        // --- Fallback / Additional Node.js Logic (Velocity) if needed ---
-        // (The Python service now handles DB + Keywords + ML, so we can rely heavily on it)
-        // Keep Velocity check as a fail-safe or double-check
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        const { count: velocityCount } = await supabase
-            .from('transactions')
-            .select('*', { count: 'exact', head: true })
-            .eq('receiver_upi_id', receiver_upi_id)
-            .gte('created_at', oneHourAgo);
+        // --- Velocity Check (Bot Blast Detection) ---
+        // distinct senders -> same receiver in short window (e.g. 15 mins)
+        const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 
-        if (velocityCount && velocityCount > 10) {
-            // Only add if not already caught by ML service to avoid double counting too much
-            // But for safety, let's just ensure we don't go over 100
-            if (!reasons.some(r => r.includes('velocity'))) {
-                score += 20;
-                reasons.push('High transaction velocity (Node.js Check)');
+        // We need to count *distinct* sender_upi_ids
+        // Supabase .select with count is good, but for distinct we might need a raw query or a transformation
+        // Since we can't easily do SELECT COUNT(DISTINCT) via simple JS SDK client without RPC, 
+        // we will fetch the records and count in memory (assuming volume isn't massive for 15 mins typically)
+        // OR checks if we can use a helper. 
+
+        const { data: recentTxns, error: velocityError } = await supabase
+            .from('transactions')
+            .select('sender_upi_id')
+            .eq('receiver_upi_id', receiver_upi_id)
+            .gte('created_at', fifteenMinsAgo);
+
+        if (!velocityError && recentTxns) {
+            const uniqueSenders = new Set(recentTxns.map(t => t.sender_upi_id).filter(id => id !== sender_upi_id));
+            // If we see more than 5 DIFFERENT people sending money to this person in 15 mins... suspicious.
+
+            if (uniqueSenders.size >= 5) { // Threshold can be tuned
+                score = 100; // Immediate Max Risk
+                verdict = 'MALICIOUS';
+                reasons.push(`Velocity Anomaly: Targeted by ${uniqueSenders.size} distinct senders in 15m (Bot-like pattern)`);
             }
         }
 

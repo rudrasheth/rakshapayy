@@ -8,3 +8,4 @@ numpy
 scipy
 supabase
 python-dotenv
+google-generativeai
