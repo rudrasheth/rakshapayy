@@ -1,0 +1,20 @@
+# Node.js
+node_modules/
+dist/
+npm-debug.log*
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# ML Artifacts
+__pycache__/
+*.pkl
+.venv/
+env/
+ml_service/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db

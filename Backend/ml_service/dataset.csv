@@ -1,0 +1,9 @@
+sender,receiver,amount,is_fraud
+alice@upi,shop@upi,500,0
+bob@upi,merchant@upi,1200,0
+charlie@upi,scam@upi,50000,1
+eve@upi,fake@upi,10,1
+david@upi,shop@upi,100,0
+mallory@upi,victim@upi,100000,1
+frank@upi,cafe@upi,50,0
+grace@upi,scam@upi,25000,1
