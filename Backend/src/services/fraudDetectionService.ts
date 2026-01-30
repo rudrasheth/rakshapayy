@@ -15,53 +15,62 @@ interface RiskResult {
 export class FraudDetectionService {
 
     static async analyzeTransaction(data: TransactionCheck): Promise<RiskResult> {
-        const { receiver_upi_id, amount } = data;
+        const { sender_upi_id, receiver_upi_id, amount } = data;
         let score = 0;
         const reasons: string[] = [];
+        let verdict: RiskResult['verdict'] = 'SAFE';
 
-        // 1. Check if Reported as Scam
-        const { count: reportCount, error: reportError } = await supabase
-            .from('scam_reports')
-            .select('*', { count: 'exact', head: true })
-            .eq('scammer_upi_id', receiver_upi_id);
+        // --- Call Python ML Service ---
+        try {
+            // Note: In production use value from env, defaulting for demo
+            const mlResponse = await fetch('http://127.0.0.1:8000/verify-receiver', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sender_vpa: sender_upi_id,
+                    receiver_vpa: receiver_upi_id,
+                    amount: amount
+                })
+            });
 
-        if (reportError) console.error('Error fetching reports:', reportError);
-
-        if (reportCount && reportCount > 0) {
-            score += 80;
-            reasons.push(`Flagged as scam by ${reportCount} users`);
+            if (mlResponse.ok) {
+                const mlResult = await mlResponse.json();
+                // Merge ML Score
+                if (mlResult.risk_score > 0) {
+                    score = mlResult.risk_score;
+                    reasons.push(...mlResult.breakdown);
+                }
+            } else {
+                console.error('ML Service Error:', mlResponse.statusText);
+            }
+        } catch (e) {
+            console.error('Failed to connect to ML Service:', e);
+            reasons.push('ML Service Unavailable (Fallback to basic rules)');
         }
 
-        // 2. Velocity Check (Transactions in last 1 hour)
+        // --- Fallback / Additional Node.js Logic (Velocity) if needed ---
+        // (The Python service now handles DB + Keywords + ML, so we can rely heavily on it)
+        // Keep Velocity check as a fail-safe or double-check
         const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-        const { count: velocityCount, error: velocityError } = await supabase
+        const { count: velocityCount } = await supabase
             .from('transactions')
             .select('*', { count: 'exact', head: true })
             .eq('receiver_upi_id', receiver_upi_id)
             .gte('created_at', oneHourAgo);
 
-        if (velocityError) console.error('Error fetching velocity:', velocityError);
-
         if (velocityCount && velocityCount > 10) {
-            score += 30;
-            reasons.push('High transaction velocity (10+ in 1 hour)');
-        } else if (velocityCount && velocityCount > 5) {
-            score += 10;
-            reasons.push('Moderate transaction velocity');
+            // Only add if not already caught by ML service to avoid double counting too much
+            // But for safety, let's just ensure we don't go over 100
+            if (!reasons.some(r => r.includes('velocity'))) {
+                score += 20;
+                reasons.push('High transaction velocity (Node.js Check)');
+            }
         }
 
-        // 3. High Value Check on Unknown Entity
-        // (Simplification: If High Amount and some risk already, amplify it)
-        if (amount > 10000 && score > 0) {
-            score += 20;
-            reasons.push('High value transaction to suspicious account');
-        }
-
-        // Determine Verdict
+        // Final Verdict
         score = Math.min(score, 100);
-        let verdict: RiskResult['verdict'] = 'SAFE';
-        if (score >= 70) verdict = 'MALICIOUS';
-        else if (score >= 30) verdict = 'SUSPICIOUS';
+        if (score >= 80) verdict = 'MALICIOUS';
+        else if (score >= 40) verdict = 'SUSPICIOUS';
 
         return { score, verdict, reasons };
     }

@@ -1,0 +1,30 @@
+--- Verification Start ---
+
+--- Case: SAFE (Standard) ---
+Input: coffee_shop@upi (₹150)
+Result: {
+  "score": 0,
+  "verdict": "SAFE",
+  "reasons": []
+}
+
+--- Case: ML/REGEX (Suspicious Pattern) ---
+Input: winner_lottery_claim@upi (₹25000)
+Result: {
+  "score": 79.5,
+  "verdict": "SUSPICIOUS",
+  "reasons": [
+    "KEYWORD: Suspicious words in VPA",
+    "ML: High probability (99%) of fraud pattern"
+  ]
+}
+
+--- Case: ML (Keyword Risk) ---
+Input: mega_offer_kyc@upi (₹5000)
+Result: {
+  "score": 30,
+  "verdict": "SAFE",
+  "reasons": [
+    "KEYWORD: Suspicious words in VPA"
+  ]
+}
